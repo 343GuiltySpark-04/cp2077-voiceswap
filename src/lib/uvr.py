@@ -90,7 +90,7 @@ class UVRProcess(Process):
                 "hop_length": 1024,
                 "segment_size": 512,
                 "overlap": 0.5,
-                "batch_size": 1,
+                "batch_size": 4,
                 "enable_denoise": True,
             },
             vr_params={
