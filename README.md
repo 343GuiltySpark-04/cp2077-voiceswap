@@ -13,11 +13,12 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 ## Requirements
 
 - Windows 10 or later _(unfortunately)_
-- Python 3.9 or later
+- Python 3.10 or later
 - Cyberpunk 2077
 - [RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/docs/en/README.en.md)
 - [Audiokinetic Wwise](https://www.audiokinetic.com/en/products/wwise) **2019.2.15**
 - FFmpeg (usually included in RVC WebUI)
+- PowerShell 7.5.4
 - Basic knowledge of PowerShell
 - At least 35 GB of free disk space, 45 GB if you're going for V's voicelines
   - This is including >12GB RVC
@@ -84,19 +85,30 @@ There are many voice models available online, they usually ship as a zip of two 
 The program looks kind of scary, it's a professional tool.
 But don't worry, this script will do everything for you.
 
-### 3. Install this project:
+### 3. Install PowerShell
+
+`winget install --id Microsoft.PowerShell --source winget`
+
+Yep, that's it.
+
+### 4. Install this project:
 
 1.  Clone this repository (e.g. `git clone https://github.com/zhincore/cp2077-voiceswap` or download it as a zip and unpack).
 2.  Go to the projects's folder (e.g. `cd cp2077-voiceswap`).
-3.  Run `.\install.ps1` to install the project and dependencies.  
+3.  Run `pwsh -file .\install.ps1` to install the project and dependencies.  
     **NOTE:** If you get the _"scripting is disabled on this system"_ error, run this command instead:  
-    `powershell.exe -noprofile -executionpolicy bypass -file .\install.ps1`
+    `pwsh -noprofile -executionpolicy bypass -file .\install.ps1`
 4.  Copy or rename file `.env.example` to `.env` and configure it for your setup.
     The example file contains comments which will hopefully help you.
 
 ## Usage
 
 Before starting, open PowerShell (or other command-line) in the project's folder and run `.\.venv\Scripts\activate` to activate venv if you haven't already.
+
+Also double check that pytorch was installed to use CUDA if you have an NVIDIA GPU with `pwsh -file ./check-pytorch.ps1`.
+If it returns as CPU only run.
+
+`pip uninstall -y torch torchvision torchaudio` then `pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio`
 
 **Legend:** Parameters in `<angle brackets>` are required, ones in `[square brackets]` are optional.  
 This README only shows important parameters, other parameters have defaults that guarentee seamless flow between phases.
