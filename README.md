@@ -18,7 +18,7 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 - [RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/docs/en/README.en.md)
 - [Audiokinetic Wwise](https://www.audiokinetic.com/en/products/wwise) **2019.2.15**
 - FFmpeg (usually included in RVC WebUI)
-- PowerShell 7.5.4
+- PowerShell 7.5.4 or later
 - Basic knowledge of PowerShell
 - At least 35 GB of free disk space, 45 GB if you're going for V's voicelines
   - This is including >12GB RVC
@@ -85,7 +85,7 @@ There are many voice models available online, they usually ship as a zip of two 
 The program looks kind of scary, it's a professional tool.
 But don't worry, this script will do everything for you.
 
-### 3. Install PowerShell
+### 3. Install PowerShell 7
 
 `winget install --id Microsoft.PowerShell --source winget`
 
