@@ -13,7 +13,7 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 ## Requirements
 
 - Windows 10 or later _(unfortunately)_
-- Python 3.10 or later
+- Python 3.10 or later with pip <= 23
 - Cyberpunk 2077
 - [RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/blob/main/docs/en/README.en.md)
 - [Audiokinetic Wwise](https://www.audiokinetic.com/en/products/wwise) **2019.2.15**
