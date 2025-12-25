@@ -4,10 +4,11 @@ import re
 from threading import Thread
 
 import nest_asyncio
-from tqdm import tqdm
 from waapi import CannotConnectToWaapiException, WaapiClient, WaapiRequestFailed
 
 from util import SubprocessException, spawn, watch_async
+from util.rich_console import console, create_progress
+
 
 nest_asyncio.apply()  # needed for waapi
 
@@ -28,6 +29,7 @@ def _get_wwise_path():
 
 def _get_wwise_project(folder: str):
     basename = os.path.basename(folder.replace(r"[\/]$", ""))
+
     return os.path.join(folder, basename + ".wproj")
 
 
@@ -119,8 +121,10 @@ async def _create_waapi(server):
 async def wait_waapi_load(waapi: WaapiClient):
     """Wait until the WAAPI server is loaded."""
 
-    tqdm.write("Waiting for Wwise to load...")
+    console.log("Waiting for Wwise to load...")
+
     # The 'loaded' event was unreliable
+
     while True:
         try:
             result = waapi.call("ak.wwise.core.getInfo")
@@ -134,31 +138,38 @@ async def wait_waapi_load(waapi: WaapiClient):
 def move_wwise_files(converted_objects: list[dict], output_path: str):
     """Moves all converted Wwise files to the given output folder and renames them correctly."""
 
-    for obj in tqdm(
-        [x for x in converted_objects if x["type"] == "Sound"],
-        desc="Renaming files",
-        unit="file",
-    ):
-        original_path = obj["sound:originalWavFilePath"]
-        filename = os.path.basename(original_path)[: -len(".wav")]
+    sounds = [item for item in converted_objects if item["type"] == "Sound"]
+    if not sounds:
+        return
 
-        path = obj["path"][len(WWISE_OBJECT_PATH) : -len(obj["name"])]
-        output_dir = os.path.join(output_path, path)
-        output = os.path.join(output_dir, filename + ".wem")
+    with create_progress(transient=True) as progress:
+        task_id = progress.add_task(
+            "Renaming files",
+            total=len(sounds),
+            unit="file",
+        )
 
-        try:
-            os.makedirs(output_dir)
-        except OSError:
-            # Overwrite existing files
+        for obj in sounds:
+            original_path = obj["sound:originalWavFilePath"]
+            filename = os.path.basename(original_path)[: -len(".wav")]
+
+            path = obj["path"][len(WWISE_OBJECT_PATH) : -len(obj["name"])]
+            output_dir = os.path.join(output_path, path)
+            output = os.path.join(output_dir, filename + ".wem")
+
+            os.makedirs(output_dir, exist_ok=True)
+
             if os.path.exists(output):
                 os.unlink(output)
 
-        os.rename(obj["sound:convertedWemFilePath"], output)
+            os.rename(obj["sound:convertedWemFilePath"], output)
+            progress.advance(task_id)
 
 
 def move_wwise_files_auto(project_dir: str, output_path: str):
     """
     Tries to find the correct output path for all converted files
+
     without the index of converted files.
     """
 
@@ -168,24 +179,29 @@ def move_wwise_files_auto(project_dir: str, output_path: str):
 
     for root, _dirs, files in os.walk(cache_dir):
         path = root[len(cache_dir) + 1 :]
+
         for file in files:
             if not file.endswith(".wem"):
                 continue
 
             found_files.append(os.path.join(path, file))
 
-    for file in tqdm(found_files, desc="Moving files", unit="file"):
-        new_path = os.path.join(output_path, file.replace("_3F75BDB9", ""))
-        new_dir = os.path.dirname(new_path)
+    if not found_files:
+        return
 
-        try:
-            os.makedirs(new_dir)
-        except OSError:
-            # Overwrite existing files
+    with create_progress(transient=True) as progress:
+        task_id = progress.add_task("Moving files", total=len(found_files), unit="file")
+
+        for file in found_files:
+            new_path = os.path.join(output_path, file.replace("_3F75BDB9", ""))
+            new_dir = os.path.dirname(new_path)
+
+            os.makedirs(new_dir, exist_ok=True)
             if os.path.exists(new_path):
                 os.unlink(new_path)
 
-        os.rename(os.path.join(cache_dir, file), new_path)
+            os.rename(os.path.join(cache_dir, file), new_path)
+            progress.advance(task_id)
 
 
 async def _convert_files(
@@ -194,13 +210,13 @@ async def _convert_files(
     # Wait for load
     await wait_waapi_load(waapi)
 
-    tqdm.write("Starting automation mode...")
+    console.log("Starting automation mode...")
 
     # Setup
     waapi.call("ak.wwise.debug.enableAutomationMode", {"enable": True})
 
     # List all files
-    tqdm.write("Starting import...")
+    console.log("Starting import...")
     to_import = []
     skipped = 0
 
@@ -209,6 +225,7 @@ async def _convert_files(
         path = "\\".join("<Folder>" + s for s in re.split(r"[\\/]", relative_root) if s)
 
         for file in files:
+
             if not file.endswith(".wav"):
                 continue
 
@@ -229,47 +246,58 @@ async def _convert_files(
                 }
             )
 
-    # Listen for imports
     if skipped > 0:
-        tqdm.write(f"Not overwriting {skipped} already processed files")
-    pbar = tqdm(total=len(to_import), desc="Importing files to Wwise", unit="file")
+        console.log(f"Not overwriting {skipped} already processed files")
 
-    def on_object_created(*_args, **kwargs):
-        if kwargs["object"]["type"] == "AudioFileSource":
-            pbar.update(1)
+    imported_ids: list[str] = []
+    handler = None
+    with create_progress(transient=True) as progress:
+        import_task_id = progress.add_task(
+            "Importing files to Wwise",
+            total=len(to_import),
+            unit="file",
+        )
 
-    handler = waapi.subscribe(
-        "ak.wwise.core.object.created", on_object_created, {"return": ["type"]}
-    )
+        def on_object_created(*_args, **kwargs):
+            if kwargs["object"]["type"] == "AudioFileSource":
+                progress.advance(import_task_id)
 
-    # Start importing
-    imported = waapi.call(
-        "ak.wwise.core.audio.import",
-        {
-            "importOperation": "replaceExisting",
-            "imports": to_import,
-        },
-    )["objects"]
-    imported = [obj["id"] for obj in imported if obj["name"].endswith("_wav")]
+        handler = waapi.subscribe(
+            "ak.wwise.core.object.created", on_object_created, {"return": ["type"]}
+        )
 
-    # Done
-    pbar.close()
-    handler.unsubscribe()
+        try:
+            imported_objects = waapi.call(
+                "ak.wwise.core.audio.import",
+                {
+                    "importOperation": "replaceExisting",
+                    "imports": to_import,
+                },
+            )["objects"]
+        finally:
+            if handler is not None:
+                handler.unsubscribe()
+                handler = None
 
-    # Create convert thread
-    tqdm.write("Starting conversion...")
+        imported_ids = [
+            obj["id"] for obj in imported_objects if obj["name"].endswith("_wav")
+        ]
+        progress.update(import_task_id, completed=len(to_import))
+
+        # Create convert thread
+    console.log("Starting conversion...")
     convert_thread = Thread(
         target=waapi.call,
         args=(
             "ak.wwise.ui.commands.execute",
             {
                 "command": "ConvertAllPlatform",
-                "objects": imported,
+                "objects": imported_ids,
             },
         ),
     )
 
-    #  Listen to converting
+    # Listen for conversion completion
     converted_objects = []
 
     def on_converted(command: str, objects, *_args, **_kwargs):
@@ -296,34 +324,65 @@ async def _convert_files(
     os.makedirs(cache_dir, exist_ok=True)
     event_queue, observer = watch_async(cache_dir, recursive=True)
 
-    pbar = tqdm(desc="Converting files", total=len(imported), unit="file")
+    total_imports = len(imported_ids)
+    completed_imports = 0
 
-    # Start converting
     convert_thread.start()
-    # Print progress while converting
-    while convert_thread.is_alive():
-        try:
-            event = event_queue.get_nowait()
-            if event.src_path.endswith(".wem"):
-                pbar.update(1)
-        except asyncio.QueueEmpty:
-            pbar.update(0)
-            convert_thread.join(0.1)
-        # Jobs seems finished, wait at most 60 seconds before moving on
-        if pbar.n >= pbar.total:
-            convert_thread.join(60)
-            break
+    try:
+        with create_progress(transient=True) as progress:
+            convert_task_id = progress.add_task(
+                "Converting files",
+                total=total_imports,
+                unit="file",
+            )
 
-    # Done
-    observer.stop()
-    pbar.close()
+            while convert_thread.is_alive():
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    progress.refresh()
+                    convert_thread.join(0.1)
+                else:
+                    if (
+                        event.src_path.endswith(".wem")
+                        and completed_imports < total_imports
+                    ):
+                        completed_imports += 1
+                        progress.advance(convert_task_id)
+
+                if total_imports > 0 and completed_imports >= total_imports:
+                    convert_thread.join(60)
+                    break
+
+            while True:
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    if (
+                        event.src_path.endswith(".wem")
+                        and completed_imports < total_imports
+                    ):
+                        completed_imports += 1
+                        progress.advance(convert_task_id)
+
+            progress.update(
+                convert_task_id,
+                completed=min(completed_imports, total_imports),
+            )
+    finally:
+        observer.stop()
+        if convert_thread.is_alive():
+            convert_thread.join(timeout=0)
+
     # handler.unsubscribe() # Prevents the code from continuing
 
     # Move and rename files
-    tqdm.write("Starting moving files...")
+    console.log("Starting moving files...")
     move_wwise_files(converted_objects, output_path)
 
-    tqdm.write("Conversion done!")
+    console.log("Conversion done!")
 
 
 async def convert_files(
@@ -332,20 +391,22 @@ async def convert_files(
     """Converts all files in the given folder to Wwise format."""
     await create_project(project_dir)
 
-    tqdm.write("##############################################################")
-    tqdm.write("# Opening Wwise in a few seconds, get ready for a jumpscare! #")
-    tqdm.write("#  The Wwise window will be fully automated, don't touch it! #")
-    tqdm.write("##############################################################")
+    console.print("##############################################################")
+    console.print("# Opening Wwise in a few seconds, get ready for a jumpscare! #")
+    console.print("#  The Wwise window will be fully automated, don't touch it! #")
+    console.print("##############################################################")
+
     await asyncio.sleep(5)
 
-    #  Start the WAAPI server
+    # Start the WAAPI server
     server_spawn = spawn_wwise(project_dir)
+
     server = await anext(server_spawn)
 
     # Try to estabilish connection
-    tqdm.write("Trying to connect to Wwise...")
+    console.log("Trying to connect to Wwise...")
     waapi = await _create_waapi(server)
-    tqdm.write("Connected!")
+    console.log("Connected!")
 
     # Run the script
     try:
@@ -353,7 +414,7 @@ async def convert_files(
     finally:
         # Close the WAAPI server
         if server.returncode is None:
-            tqdm.write("Closing Wwise...")
+            console.log("Closing Wwise...")
             server.terminate()
             await server.wait()
         waapi.disconnect()
