@@ -54,7 +54,6 @@ def new_tqdm_init(*args, **kwargs):
     old_tqdm_init(*args, **kwargs)
 
 
-
 tqdm.__init__ = new_tqdm_init
 
 
@@ -73,7 +72,7 @@ def _custom_final_process(
 class UVRProcess(Process):
     """Process for running UVR."""
 
-    def __init__(self, queue: Queue = None, progress_counter: Value = None, **kwargs):
+    def __init__(self, queue: Queue = None, progress_counter: Value = None, **kwargs):  # type: ignore
         Process.__init__(self, **kwargs)
 
         self._run = Value(ctypes.c_bool, False)
@@ -209,7 +208,6 @@ class UVRProcessManager:
     def wait(self):
         """Wait for all workers to finish."""
         self._queue.join()
-
 
     def _get_progress_task(self):
         """Retrieve the current rich progress task with backward compatibility."""

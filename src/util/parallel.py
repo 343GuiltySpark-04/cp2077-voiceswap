@@ -110,5 +110,3 @@ class Parallel:
     def progress(self) -> Progress:
         """Expose the underlying progress instance."""
         return self.__progress
-
-

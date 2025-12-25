@@ -21,8 +21,8 @@ graph = helper.make_graph([node], "mm", [A, B], [Y])
 
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
 
-# 🔥 Pin IR version to something your ORT accepts
-model.ir_version = 11  # if this still fails, try 10 or 9
+# Pin IR version to something your ORT accepts
+model.ir_version = 11
 
 onnx.checker.check_model(model)
 

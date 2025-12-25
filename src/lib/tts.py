@@ -142,7 +142,7 @@ def _init_tts_worker(p_refenrece: str, p_language: str):
     _g_reference = p_refenrece
     _g_language = p_language
 
-    from TTS.api import TTS
+    from TTS.api import TTS  # type: ignore
 
     # Init TTS
     _g_tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
