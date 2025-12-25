@@ -1,9 +1,7 @@
 import asyncio
 import os
-
-from tqdm import tqdm
-
 from util import Parallel, SubprocessException, spawn
+from util.rich_console import console, create_progress
 
 
 async def decode(source: str, output: str):
@@ -36,7 +34,7 @@ async def decode_all(input_path: str, output_path: str):
         try:
             await decode(input_file, output_file + ".wav")
         except SubprocessException:
-            tqdm.write(f"Converting {name} failed, continuing...")
+            console.log(f"[yellow]Converting {name} failed, continuing...[/]")
 
     for root, _dirs, files in os.walk(input_path):
         path = root[len(input_path) + 1 :]
@@ -46,8 +44,8 @@ async def decode_all(input_path: str, output_path: str):
             if name.endswith(".wem"):
                 parallel.run(process, path, name)
 
-    await parallel.wait()
-    tqdm.write("Exporting done!")
+        await parallel.wait()
+    console.log("Exporting done!")
 
 
 async def export_embedded(source: str, output_path: str):

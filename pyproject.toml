@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cp2077_voiceswap"
-version = "0.0.1"
+version = "0.0.2"
 authors = [
   { name="Zhincore", email="adam@zhincore.eu" },
 ]
@@ -20,6 +20,7 @@ dependencies  = [
   "nest-asyncio",
   "watchdog",
   "colorama",
+  "rich",
   "audio-separator[gpu]"
 ]
 

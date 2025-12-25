@@ -4,9 +4,10 @@ import json
 import asyncio
 import string
 from dataclasses import dataclass
-from tqdm import tqdm
 from util import Parallel, SubprocessException, spawn
 import config
+from util.rich_console import console, create_progress
+
 
 FFMPEG_ARGS = (
     "-nostdin",
@@ -206,7 +207,7 @@ async def merge(
             parallel.run(process, base_name, path, output)
 
     if skipped > 0:
-        tqdm.write(f"Skipping {skipped} already merged files.")
+        console.log(f"Skipping {skipped} already merged files.")
 
     await parallel.wait()
 
@@ -218,9 +219,9 @@ async def merge(
         ) as f:
             json.dump(silent, f)
 
-        tqdm.write(
+        console.log(
             f"Warning: {len(silent)} files are probably silent and were skipped. \n"
             + "Their paths were saved in _silent_files.json in output folder."
         )
 
-    tqdm.write("Merging done!")
+    console.log("Merging done!")

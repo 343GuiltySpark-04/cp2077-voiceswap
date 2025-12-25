@@ -1,17 +1,15 @@
 import asyncio
 import os
 import re
-
-from tqdm import tqdm
-
 from lib import ffmpeg
 from util import Parallel, SubprocessException, find_files, spawn
+from util.rich_console import console, create_progress
 
 
 async def export_info(opusinfo_path: str, output_path: str):
     """Export opusinfo as JSON."""
 
-    tqdm.write("Exporting opusinfo...")
+    console.log("Exporting opusinfo...")
 
     process = await spawn(
         "OpusToolZ",
@@ -28,7 +26,7 @@ async def export_info(opusinfo_path: str, output_path: str):
             "Exporting opusinfo failed with exit code " + str(result)
         )
 
-    tqdm.write("Opusinfo exported!")
+    console.log("Opusinfo exported!")
 
 
 async def extract_sfx(
@@ -36,43 +34,46 @@ async def extract_sfx(
 ):
     """Extracts sfx of given hashes from the given opusinfo and opuspaks."""
 
-    tqdm.write("Reading SFX containers...")
-    pbar = tqdm(total=len(hashes), desc="Extracting SFX", unit="file")
+    console.log("Reading SFX containers...")
 
-    process = await spawn(
-        "OpusToolZ",
-        "./libs/OpusToolZ/OpusToolZ",
-        "extract",
-        os.path.abspath(opusinfo_path),
-        os.path.abspath(output_dir),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-    )
+    with create_progress(transient=True) as progress:
+        task_id = progress.add_task("Extracting SFX", total=len(hashes), unit="file")
 
-    while not process.stdout.at_eof():
-        line = b""
-        try:
-            line = await asyncio.wait_for(process.stdout.readline(), 1)
-        except asyncio.TimeoutError:
-            pbar.update(0)
+        process = await spawn(
+            "OpusToolZ",
+            "./libs/OpusToolZ/OpusToolZ",
+            "extract",
+            os.path.abspath(opusinfo_path),
+            os.path.abspath(output_dir),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+        )
 
-        stripped = line.decode().strip()
+        while not process.stdout.at_eof():
+            line = b""
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), 1)
+            except asyncio.TimeoutError:
+                # keep the UI responsive while waiting for next output
+                progress.refresh()
+                continue
 
-        if stripped.startswith("Awaiting"):
-            # Give hashes
-            process.stdin.write(("\n".join(map(str, hashes)) + "\n\n").encode())
-            await process.stdin.drain()
-        elif stripped.startswith("Wrote"):
-            pbar.update(1)
-        elif (
-            stripped != ""
-            and not stripped.startswith("Found")
-            and not stripped.startswith("Loading")
-        ):
-            tqdm.write(stripped)
+            stripped = line.decode().strip()
 
-    result = await process.wait()
-    pbar.close()
+            if stripped.startswith("Awaiting"):
+                # Give hashes
+                process.stdin.write(("\n".join(map(str, hashes)) + "\n\n").encode())
+                await process.stdin.drain()
+            elif stripped.startswith("Wrote"):
+                progress.advance(task_id)
+            elif (
+                stripped != ""
+                and not stripped.startswith("Found")
+                and not stripped.startswith("Loading")
+            ):
+                console.log(stripped)
+
+        result = await process.wait()
 
     if result != 0:
         raise SubprocessException("Exporting SFX failed with exit code " + str(result))
@@ -92,13 +93,13 @@ async def extract_sfx(
 
         await parallel.wait()
 
-    tqdm.write("SFX exported!")
+    console.log("SFX exported!")
 
 
 async def repack_sfx(opusinfo_path: str, input_dir: str, output_dir: str):
     """Repacks given folder of .wav files into paks and creates opusinfo in output path."""
 
-    tqdm.write("Reading SFX containers...")
+    console.log("Reading SFX containers...")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -118,43 +119,85 @@ async def repack_sfx(opusinfo_path: str, input_dir: str, output_dir: str):
     if result != 0:
         raise SubprocessException(f"Repacking SFX failed with exit code {result}")
 
-    tqdm.write("Repacked SFX!")
+    console.log("Repacked SFX!")
 
 
 async def _report_repack_progress(process):
-    pbar = None
+    with create_progress(transient=True) as progress:
+        packing_task_id = None
+        writing_task_id = None
 
-    def close_pbar():
-        if pbar:
-            pbar.close()
+        while not process.stdout.at_eof():
+            line = b""
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), 5)
+            except asyncio.TimeoutError:
+                # keep UI responsive while idle
+                progress.refresh()
+                continue
 
-    while not process.stdout.at_eof():
-        line = b""
-        try:
-            line = await asyncio.wait_for(process.stdout.readline(), 5)
-        except asyncio.TimeoutError:
-            pass
+            stripped = line.decode().strip()
 
-        stripped = line.decode().strip()
+            if stripped.startswith("Found") and stripped.endswith("files to pack."):
+                # Switch to packing phase
+                if writing_task_id is not None:
+                    progress.update(writing_task_id, visible=False)
 
-        if stripped.startswith("Found") and stripped.endswith("files to pack."):
-            close_pbar()
+                number = re.search(r"\d+", stripped).group()
+                total = int(number)
 
-            number = re.search(r"\d+", stripped).group()
-            pbar = tqdm(total=int(number), desc="Packing SFX", unit="file")
-        elif stripped.startswith("Processed file"):
-            pbar.update(1)
+                if packing_task_id is None:
+                    packing_task_id = progress.add_task(
+                        "Packing SFX", total=total, unit="file"
+                    )
+                else:
+                    progress.update(
+                        packing_task_id,
+                        total=total,
+                        completed=0,
+                        description="Packing SFX",
+                        unit="file",
+                        visible=True,
+                    )
 
-        elif stripped.startswith("Will write"):
-            close_pbar()
+            elif stripped.startswith("Processed file"):
+                if packing_task_id is not None:
+                    progress.advance(packing_task_id)
 
-            number = re.search(r"\d+", stripped).group()
-            pbar = tqdm(total=int(number), desc="Writing paks", unit="pak")
-        elif stripped.startswith("Wrote"):
-            pbar.update(1)
-        elif stripped != "":
-            tqdm.write(stripped)
-        elif pbar:
-            pbar.update(0)
+            elif stripped.startswith("Will write"):
+                # Switch to writing phase
+                if packing_task_id is not None:
+                    progress.update(packing_task_id, visible=False)
 
-    close_pbar()
+                number = re.search(r"\d+", stripped).group()
+                total = int(number)
+
+                if writing_task_id is None:
+                    writing_task_id = progress.add_task(
+                        "Writing paks", total=total, unit="pak"
+                    )
+                else:
+                    progress.update(
+                        writing_task_id,
+                        total=total,
+                        completed=0,
+                        description="Writing paks",
+                        unit="pak",
+                        visible=True,
+                    )
+
+            elif stripped.startswith("Wrote"):
+                if writing_task_id is not None:
+                    progress.advance(writing_task_id)
+
+            elif stripped != "":
+                console.log(stripped)
+            else:
+                # blank line heartbeat
+                progress.refresh()
+
+        # Hide any remaining tasks
+        if packing_task_id is not None:
+            progress.update(packing_task_id, visible=False)
+        if writing_task_id is not None:
+            progress.update(writing_task_id, visible=False)
