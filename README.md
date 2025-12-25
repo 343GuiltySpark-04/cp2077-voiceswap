@@ -2,13 +2,10 @@
 
 Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 
-> ⚠️ This project is rather experimental, don't expect it to be perfect!  
+> ⚠️ This project is ~~rather~~ insanely experimental, don't expect it to be perfect!  
 > It's usage and functionality may change as it's still in development.
->
-> **🔥 I am currently overhauling big parts of this project. Don't expect things to work at all.**
 > README is probably outdated too. Give me time!
-
-🗨️ [Join my Discord server](https://discord.gg/5mVrUh34Nd) for support and chat!
+> SFX and Grunts are shelved until I get my bearings.
 
 ## Requirements
 
@@ -22,6 +19,8 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 - Basic knowledge of PowerShell
 - At least 35 GB of free disk space, 45 GB if you're going for V's voicelines
   - This is including >12GB RVC
+- Admin access
+
 
 ### Highly recommended:
 
@@ -29,6 +28,7 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 - [Poetry](https://python-poetry.org/docs/) - for easier installing and running of RVC
 - GPU with up-to-date drivers - on CPU the process will take much longer
   - For NVIDIA make sure to instal [CUDA **11.8**](https://developer.nvidia.com/cuda-11-8-0-download-archive) or 11.7
+- An SSD or it may be slower
 
 ## Goals
 
@@ -152,3 +152,4 @@ If you want to develop this project, I recommend running `pip install .[dev]` to
 
 - [WolvenKit](https://github.com/WolvenKit/WolvenKit) - modding the game
 - [ww2ogg](https://github.com/hcs64/ww2ogg) - converting .wem files to a standard format
+
