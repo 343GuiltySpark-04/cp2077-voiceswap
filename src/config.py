@@ -20,7 +20,7 @@ UVR_FIRST_SUFFIX = "_vocals.wav"
 UVR_FIRST_SUFFIX_O = "_instrumental.wav"
 UVR_FIRST_CACHE = "karaoke"
 UVR_SECOND_MODEL = "Reverb_HQ_By_FoxJoy.onnx"
-UVR_SECOND_SUFFIX = UVR_FIRST_SUFFIX + "_instrumental.wav"
+UVR_SECOND_SUFFIX = UVR_FIRST_SUFFIX + "_no reverb.wav"
 UVR_SECOND_SUFFIX_O = UVR_FIRST_SUFFIX + "_reverb.wav"
 UVR_SECOND_CACHE = "isolated"
 

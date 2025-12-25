@@ -1,9 +1,6 @@
 # ort_smoketest.py
 import os
 import time
-
-os.environ.setdefault("ORT_DISABLE_TENSORRT", "1")
-
 import numpy as np
 import onnx
 from onnx import helper, TensorProto
