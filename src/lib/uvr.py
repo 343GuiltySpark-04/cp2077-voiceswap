@@ -1,17 +1,24 @@
 import asyncio
+import ctypes
+import logging
 import os
 from functools import partial
-import logging
 from inspect import currentframe, getframeinfo
-import ctypes
-from typing import TYPE_CHECKING
+from pathlib import Path
 from queue import Empty
+from typing import TYPE_CHECKING, Optional
+
+
 from librosa.util.exceptions import ParameterError
-from torch.multiprocessing import Process, Queue, JoinableQueue, Value
+from rich.progress import Progress, TaskID
+from torch.multiprocessing import JoinableQueue, Process, Queue, Value
 from tqdm import tqdm
+
 import config
-from util import Parallel, find_files
 import lib.ffmpeg as ffmpeg
+from util import Parallel, find_files
+from util.rich_console import console, create_progress
+
 
 if TYPE_CHECKING:
     from audio_separator.separator import Separator
@@ -22,11 +29,30 @@ old_tqdm_init = tqdm.__init__
 
 def new_tqdm_init(*args, **kwargs):
     """Disable tqdm progress bar for audio_separator."""
-    traceback = getframeinfo(currentframe().f_back)
-    if "site-packages/audio_separator" in traceback.filename:
-        kwargs["disable"] = True
+    frame = currentframe()
+    if frame is not None:
+        frame = frame.f_back
+
+    disable = False
+
+    while frame is not None:
+        try:
+            frame_info = getframeinfo(frame)
+        except (OSError, RuntimeError):
+            frame = frame.f_back
+            continue
+
+        if "audio_separator" in Path(frame_info.filename).parts:
+            disable = True
+            break
+
+        frame = frame.f_back
+
+    if disable:
+        kwargs.setdefault("disable", True)
 
     old_tqdm_init(*args, **kwargs)
+
 
 
 tqdm.__init__ = new_tqdm_init
@@ -45,16 +71,16 @@ def _custom_final_process(
 
 
 class UVRProcess(Process):
-    """Process for running UVR"""
+    """Process for running UVR."""
 
-    def __init__(self, queue: Queue = None, progress: Value = None, **kwargs):
+    def __init__(self, queue: Queue = None, progress_counter: Value = None, **kwargs):
         Process.__init__(self, **kwargs)
 
         self._run = Value(ctypes.c_bool, False)
         self._queue = queue or JoinableQueue()
-        self._progress = progress or Value(ctypes.c_int, 0)
-        self._last_model = None
-        self._separator = None
+        self._progress_counter = progress_counter or Value(ctypes.c_int, 0)
+        self._last_model: Optional[str] = None
+        self._separator: Optional["Separator"] = None
 
     def _separate(self, input_path: str, output_path: str, file: str, attempt=0):
         dirname = os.path.dirname(file)
@@ -113,22 +139,18 @@ class UVRProcess(Process):
                 continue
 
             try:
-                # Load new model if needed
                 if wanted_model != self._last_model:
                     self._separator.load_model(wanted_model)
                     self._last_model = wanted_model
 
-                # Run separation
                 self._separate(input_path, output_path, file)
 
-                with self._progress.get_lock():
-                    self._progress.value += 1
-            except:
-                # We failed, put the task back (I expect low VRAM, not unparsable file)
+                with self._progress_counter.get_lock():
+                    self._progress_counter.value += 1
+            except Exception:
                 self._queue.put((input_path, output_path, file, wanted_model))
                 raise
             finally:
-                # but either way we need to mark it done otherwise it would be undone twice
                 self._queue.task_done()
 
 
@@ -137,13 +159,15 @@ class UVRProcessManager:
 
     def __init__(self, jobs=1):
         self._queue = JoinableQueue()
-        self._progress = Value(ctypes.c_int, 0)
-        self._wanted_model = None
+        self._progress_counter = Value(ctypes.c_int, 0)
+        self._wanted_model: Optional[str] = None
 
         self._workers = set(
-            UVRProcess(self._queue, self._progress) for _ in range(jobs)
+            UVRProcess(self._queue, self._progress_counter) for _ in range(jobs)
         )
-        self.pbar = tqdm(disable=True)
+
+        self._progress_display: Optional[Progress] = None
+        self._progress_task_id: Optional[TaskID] = None
 
         for worker in self._workers:
             worker.start()
@@ -159,29 +183,84 @@ class UVRProcessManager:
         """Change to loaded model."""
         self._wanted_model = model
 
+    def configure_progress(
+        self,
+        progress: Progress,
+        task_id: TaskID,
+        *,
+        total: Optional[int] = None,
+        visible: Optional[bool] = None,
+    ):
+        """Attach a Rich progress task to track worker progress."""
+        self._progress_display = progress
+        self._progress_task_id = task_id
+
+        with self._progress_counter.get_lock():
+            self._progress_counter.value = 0
+
+        update_kwargs = {"completed": 0}
+        if total is not None:
+            update_kwargs["total"] = total
+        if visible is not None:
+            update_kwargs["visible"] = visible
+
+        self._progress_display.update(task_id, **update_kwargs)
+
     def wait(self):
         """Wait for all workers to finish."""
         self._queue.join()
 
+
+    def _get_progress_task(self):
+        """Retrieve the current rich progress task with backward compatibility."""
+        if self._progress_display is None or self._progress_task_id is None:
+            raise RuntimeError("Progress has not been configured.")
+
+        progress = self._progress_display
+        task_id = self._progress_task_id
+
+        get_task = getattr(progress, "get_task", None)
+        if callable(get_task):
+            return get_task(task_id)
+
+        tasks = getattr(progress, "tasks", None)
+        if tasks is not None:
+            for task in tasks:
+                if getattr(task, "id", None) == task_id:
+                    return task
+
+        raise AttributeError("Progress object does not support retrieving tasks by id.")
+
     async def watch(self):
         """Wait and update the progress asynchronously."""
-        while self.pbar.n < self.pbar.total:
-            # Update progress bar
-            with self._progress.get_lock():
-                self.pbar.update(self._progress.value)
-                self._progress.value = 0
+        task = self._get_progress_task()
+        if task.total is not None and task.total == 0:
+            return
 
-            # Check on workers
+        while True:
+            increment = 0
+
+            with self._progress_counter.get_lock():
+                if self._progress_counter.value:
+                    increment = self._progress_counter.value
+                    self._progress_counter.value = 0
+
+            if increment:
+                self._progress_display.advance(self._progress_task_id, increment)
+
             for worker in [*self._workers]:
                 if worker.exitcode is not None:
-                    tqdm.write("WARNING: A worker died, respawning...")
+                    console.log("[yellow]WARNING[/]: A worker died, respawning...")
                     self._workers.remove(worker)
-                    new_worker = UVRProcess(self._queue, self._progress)
+                    new_worker = UVRProcess(self._queue, self._progress_counter)
                     new_worker.start()
                     self._workers.add(new_worker)
 
-            # TODO: a return queue?
-            await asyncio.sleep(0.01)
+            task = self._get_progress_task()
+            if task.total is not None and task.completed >= task.total:
+                break
+
+            await asyncio.sleep(0.05)
 
     def terminate(self):
         """Terminate all workers."""
@@ -201,12 +280,10 @@ async def isolate_vocals(
     n_workers=1,
 ):
     """Splits audio files to vocals and the rest. The audio has to be correct wav."""
-    # Prepare paths
     formatted_path = os.path.join(cache_path, config.UVR_FORMAT_CACHE)
     split_path = os.path.join(cache_path, config.UVR_FIRST_CACHE)
     reverb_path = os.path.join(cache_path, config.UVR_SECOND_CACHE)
 
-    # Load list of files
     files = set(find_files(input_path))
 
     if not overwrite:
@@ -218,74 +295,100 @@ async def isolate_vocals(
                 skipped += 1
                 files.remove(file)
 
-        tqdm.write(f"Skipping {skipped} already done files.")
+        console.log(f"Skipping {skipped} already done files.")
 
     if len(files) == 0:
-        tqdm.write("No files to process.")
+        console.log("No files to process.")
         return
 
-    # Prepare conversion and splitting
-    ffmpegs = Parallel("[Phase 1/3] Converting files", leave=True, unit="file")
-    split_pbar = tqdm(desc="[Phase 2/3] Separating audio", leave=True, unit="file")
-    uvr_workers = UVRProcessManager(n_workers)
-    uvr_workers.pbar = split_pbar
+    with create_progress() as progress:
+        ffmpegs = Parallel(
+            "[Phase 1/3] Converting files",
+            unit="files",
+            progress=progress,
+        )
+        split_task_id = progress.add_task(
+            "[Phase 2/3] Separating audio",
+            total=0,
+            unit="files",
+            visible=False,
+        )
+        reverb_task_id = progress.add_task(
+            "[Phase 3/3] Removing reverb",
+            total=0,
+            unit="files",
+            visible=False,
+        )
 
-    uvr_workers.set_model(config.UVR_FIRST_MODEL)
+        uvr_workers = UVRProcessManager(n_workers)
+        uvr_workers.set_model(config.UVR_FIRST_MODEL)
+        uvr_workers.configure_progress(
+            progress,
+            split_task_id,
+            total=0,
+            visible=False,
+        )
 
-    async def convert_and_process(file: str):
-        dirname = os.path.dirname(file)
-        os.makedirs(os.path.join(formatted_path, dirname), exist_ok=True)
+        async def convert_and_process(file: str):
+            dirname = os.path.dirname(file)
+            os.makedirs(os.path.join(formatted_path, dirname), exist_ok=True)
 
-        converted_file = file.replace(".ogg", ".wav")
-        converted_path = os.path.join(formatted_path, converted_file)
-        if overwrite or not os.path.exists(converted_path):
-            await ffmpeg.to_wav(os.path.join(input_path, file), converted_path)
+            converted_file = file.replace(".ogg", ".wav")
+            converted_path = os.path.join(formatted_path, converted_file)
+            if overwrite or not os.path.exists(converted_path):
+                await ffmpeg.to_wav(os.path.join(input_path, file), converted_path)
 
-        uvr_workers.submit(formatted_path, split_path, converted_file)
+            uvr_workers.submit(formatted_path, split_path, converted_file)
 
-    # Run conversion and splitting
-    split_files = []
+        split_files = []
 
-    for file in files:
-        output_file = file.replace(".ogg", ".wav") + config.UVR_FIRST_SUFFIX
+        for file in files:
+            output_file = file.replace(".ogg", ".wav") + config.UVR_FIRST_SUFFIX
 
-        if not overwrite:
-            output = os.path.join(split_path, output_file)
-            if os.path.exists(output):
-                continue
+            if not overwrite:
+                output = os.path.join(split_path, output_file)
+                if os.path.exists(output):
+                    continue
 
-        split_files.append(output_file)
+            split_files.append(output_file)
+            ffmpegs.run(convert_and_process, file)
 
-        ffmpegs.run(convert_and_process, file)
+        cached = len(files) - len(split_files)
 
-    cached = len(files) - len(split_files)
+        if not overwrite and cached > 0:
+            console.log(f"Won't split {cached} already split files.")
 
-    if not overwrite and cached > 0:
-        tqdm.write(f"Won't split {cached} already split files.")
+        uvr_workers.configure_progress(
+            progress,
+            split_task_id,
+            total=len(split_files),
+            visible=len(split_files) > 0,
+        )
 
-    split_pbar.reset(ffmpegs.count_jobs())
+        await asyncio.gather(ffmpegs.wait(), uvr_workers.watch())
+        progress.update(split_task_id, visible=False)
 
-    await asyncio.gather(ffmpegs.wait(), uvr_workers.watch())
-    split_pbar.close()
+        console.log("Waiting for workers...")
+        uvr_workers.wait()
 
-    tqdm.write("Waiting for workers...")
-    uvr_workers.wait()
+        reverb_total = len(files)
+        uvr_workers.set_model(config.UVR_SECOND_MODEL)
+        uvr_workers.configure_progress(
+            progress,
+            reverb_task_id,
+            total=reverb_total,
+            visible=reverb_total > 0,
+        )
 
-    # Reset workers
-    reverb_pbar = tqdm(
-        total=len(files), desc="[Phase 3/3] Removing reverb", unit="file"
-    )
-    uvr_workers.pbar = reverb_pbar
-    uvr_workers.set_model(config.UVR_SECOND_MODEL)
+        for file in files:
+            input_file = file.replace(".ogg", ".wav") + config.UVR_FIRST_SUFFIX
+            uvr_workers.submit(split_path, reverb_path, input_file)
 
-    for file in files:
-        input_file = file.replace(".ogg", ".wav") + config.UVR_FIRST_SUFFIX
-        uvr_workers.submit(split_path, reverb_path, input_file)
+        await uvr_workers.watch()
+        progress.update(reverb_task_id, visible=False)
 
-    await uvr_workers.watch()
-    split_pbar.close()
+        console.log("Waiting for workers...")
+        uvr_workers.wait()
 
-    tqdm.write("Waiting for workers...")
-    uvr_workers.wait()
-    uvr_workers.terminate()
-    uvr_workers.join()
+        uvr_workers.terminate()
+        uvr_workers.join()

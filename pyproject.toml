@@ -20,6 +20,7 @@ dependencies  = [
   "nest-asyncio",
   "watchdog",
   "colorama",
+  "rich",
   "audio-separator[gpu]"
 ]
 
