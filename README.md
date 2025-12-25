@@ -7,6 +7,10 @@ Tool for automating the creation of AI voice-over mods for Cyberpunk 2077.
 > README is probably outdated too. Give me time!
 > SFX and Grunts are shelved until I get my bearings.
 
+
+☢️ DO NOT RUN `ort-doctor.ps1` it is very WIP and may nuke system vars.
+
+
 ## Requirements
 
 - Windows 10 or later _(unfortunately)_
@@ -152,4 +156,5 @@ If you want to develop this project, I recommend running `pip install .[dev]` to
 
 - [WolvenKit](https://github.com/WolvenKit/WolvenKit) - modding the game
 - [ww2ogg](https://github.com/hcs64/ww2ogg) - converting .wem files to a standard format
+
 
