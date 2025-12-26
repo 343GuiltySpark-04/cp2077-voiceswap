@@ -19,7 +19,7 @@ console = Console()
 def create_progress(*, transient: bool = False) -> Progress:
     """Create a configured Rich progress instance shared across the project."""
     return Progress(
-        SpinnerColumn(spinner_name="dots"),
+        SpinnerColumn(spinner_name="aesthetic"),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=None),
         TaskProgressColumn(),
